@@ -26,8 +26,8 @@ to regenerate the data from raw structures.
 Requires Python 3.11 or newer.
 
 ```bash
-git clone https://github.com/YesselmanLabPublications/XXXX
-cd XXXX
+git clone https://github.com/YesselmanLabPublications/2026_Rubric_paper
+cd 2026_Rubric_paper
 
 # Create a new conda environment (also works with mamba / micromamba)
 conda env create -f environment.yml
