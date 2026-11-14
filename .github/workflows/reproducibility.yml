@@ -1,0 +1,293 @@
+name: reproducibility
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  code-integrity:
+    name: install + notebooks valid + scripts import (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        # 3.11 is the oldest Python the pinned numpy, pandas and scipy support.
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install requirements
+        run: pip install -r requirements.txt
+      - name: Notebooks are valid
+        run: |
+          python - <<'PY'
+          import glob, sys, nbformat
+          bad = 0
+          for nb in sorted(glob.glob("notebooks/**/*.ipynb", recursive=True)):
+              try:
+                  nbformat.read(nb, as_version=4); print("ok  ", nb)
+              except Exception as e:
+                  print("FAIL", nb, e); bad = 1
+          sys.exit(bad)
+          PY
+      - name: Scripts import without error
+        run: |
+          python - <<'PY'
+          import glob, subprocess, sys
+          # Each script is imported in a fresh interpreter with its own folder first
+          # on sys.path, exactly as `python path/to/script.py` would see it. One
+          # shared process breaks sibling imports and lets scripts/data_gen/_vendor
+          # shadow scripts/validation/_vendor.
+          CHECK = (
+              "import importlib.util, pathlib, sys\n"
+              "f = pathlib.Path(sys.argv[1]).resolve()\n"
+              "sys.path[:0] = [str(f.parent)]\n"
+              "sys.path.append('scripts/data_gen')\n"
+              "spec = importlib.util.spec_from_file_location('mod_' + f.stem, f)\n"
+              "spec.loader.exec_module(importlib.util.module_from_spec(spec))\n"
+          )
+          bad = 0
+          for f in sorted(glob.glob("scripts/**/*.py", recursive=True)):
+              # _vendor/* are package internals (relative imports); they are
+              # exercised transitively by the build_* scripts, not standalone.
+              if "/_vendor/" in f.replace("\\", "/"):
+                  continue
+              # reference/* drive the RUBRIC engine repos, which are expected as
+              # siblings of this checkout and are not present on the runner.
+              # Syntax is still checked below.
+              if "/reference/" in f.replace("\\", "/"):
+                  continue
+              r = subprocess.run([sys.executable, "-c", CHECK, f],
+                                 capture_output=True, text=True)
+              if r.returncode == 0:
+                  print("ok  ", f)
+              else:
+                  err = r.stderr.strip().splitlines()
+                  print("FAIL", f, err[-1] if err else f"exit {r.returncode}"); bad = 1
+          sys.exit(bad)
+          PY
+      - name: Engine-driven scripts compile
+        run: |
+          python - <<'PY'
+          import glob, py_compile, sys
+          bad = 0
+          for f in sorted(glob.glob("scripts/reference/*.py")):
+              try:
+                  py_compile.compile(f, doraise=True); print("ok  ", f)
+              except Exception as e:
+                  print("FAIL", f, type(e).__name__, e); bad = 1
+          sys.exit(bad)
+          PY
+
+  changes:
+    name: detect fetch-related changes
+    runs-on: ubuntu-latest
+    outputs:
+      fetch: ${{ steps.filter.outputs.fetch }}
+      notebooks: ${{ steps.filter.outputs.notebooks }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        if: github.event_name == 'push' || github.event_name == 'pull_request'
+        with:
+          filters: |
+            fetch:
+              - 'scripts/fetch_data.sh'
+              - '.github/workflows/reproducibility.yml'
+            notebooks:
+              - 'notebooks/**'
+              - 'requirements.txt'
+              - 'scripts/fetch_data.sh'
+              - '.github/workflows/reproducibility.yml'
+
+  data-fetch:
+    name: fetch_data.sh (${{ matrix.os }}, ${{ matrix.downloader }})
+    needs: changes
+    if: needs.changes.outputs.fetch == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        downloader: [curl, gdown]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install gdown (gdown leg only)
+        if: matrix.downloader == 'gdown'
+        run: pip install gdown
+      - name: Fetch the data archive
+        run: bash scripts/fetch_data.sh
+      - name: Assert data/ landed in the right place
+        run: |
+          python - <<'PY'
+          import pathlib, sys
+          expect = [
+              "data/reference/scoring_tables",
+              "data/comparison",
+              "data/validation",
+          ]
+          bad = 0
+          for d in expect:
+              p = pathlib.Path(d)
+              ok = p.is_dir() and any(p.iterdir())
+              print(("ok  " if ok else "FAIL"), d)
+              bad |= not ok
+          if pathlib.Path("data.zip").exists():
+              print("FAIL data.zip was not removed"); bad = 1
+          sys.exit(bad)
+          PY
+
+  engine-reproducibility:
+    name: install engine + regenerate features (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install requirements and the RUBRIC engine
+        run: pip install -r requirements.txt -r requirements-engine.txt
+      - name: Extract features for the 2 fixture structures
+        run: |
+          cd scripts/data_gen
+          python extract_pair_features.py \
+            --reference-set ../../.github/fixtures/mini_reference_set.json \
+            --output-dir "$RUNNER_TEMP/feat" --workers 2
+          python extract_backbone_torsions.py \
+            --reference-set ../../.github/fixtures/mini_reference_set.json \
+            --output "$RUNNER_TEMP/feat/torsions_all.csv" --workers 2
+      - name: Assert the tables were produced
+        run: |
+          python - <<'PY'
+          import os, pathlib, sys, pandas as pd
+          feat = pathlib.Path(os.environ["RUNNER_TEMP"]) / "feat"
+          ok = True
+          for f in ["pairs.csv", "hbonds.csv", "torsions.csv", "torsions_all.csv"]:
+              p = feat / f
+              n = len(pd.read_csv(p)) if p.exists() else 0
+              print(("ok  " if n > 0 else "FAIL"), f, n, "rows")
+              ok = ok and n > 0
+          sys.exit(0 if ok else 1)
+          PY
+
+  notebooks-run:
+    name: fetch data + execute every notebook
+    needs: changes
+    if: >-
+      needs.changes.outputs.notebooks == 'true' ||
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install requirements
+        run: pip install -r requirements.txt
+      - name: Fetch the data archive
+        run: bash scripts/fetch_data.sh
+      - name: Archive contains what the notebooks read
+        run: |
+          python - <<'PY'
+          import pathlib, sys
+          needed = ["data/" + f for f in [
+              "benchmark/dssr_RUBRIC_time_benchmark.csv",
+              "benchmark/runtime_direct_all/per_structure.csv",
+              "benchmark/runtime_direct_all/speedups.csv",
+              "comparison/barnaba_pairs.json",
+              "comparison/bpnet_pairs.json",
+              "comparison/cWW.json",
+              "comparison/dssr_pairs.json",
+              "comparison/fr3d",
+              "comparison/rubric_candidates.json",
+              "comparison/rubric_pairs.json",
+              "comparison/residue_names.json",
+              "comparison/rnapolis_pairs.json",
+              "comparison/rnaview_pairs.json",
+              "pymol/renders/1C_ideal_GC.png",
+              "pymol/renders/6A.png",
+              "reference/high_quality_features/hbonds.csv",
+              "reference/high_quality_features/torsions.csv",
+              "reference/metadata/metadata_cache.json",
+              "reference/quality_axes/bang_vs_quality.csv",
+              "reference/reference_sets/reference_set.json",
+              "reference/reference_sets/reference_set_poor.json",
+              "reference/resolved_again/issue_rates_per_unit.csv",
+              "reference/resolved_again/redo_per_structure_points.csv",
+              "reference/resolved_again/resolve_pairs_matched.csv",
+              "reference/resolved_again/resolve_per_molecule_points.csv",
+              "reference/scores/pair_scores_uniques_rubric.jsonl",
+              "reference/scores/scores_all_uniques.json",
+              "reference/scores/scores_nmr_nonredundant.json",
+              "reference/scoring_tables/penalty_weights.json",
+              "reference/scoring_tables/prosco_distributions.json",
+              "reference/scoring_tables/z_tables.json",
+              "validation/annotator_consensus.json",
+              "validation/annotator_consensus_shared.json",
+              "validation/pdb_redo_pairs_comparison.json",
+              "validation/rejection_referee_support.json",
+              "validation/time_reversal_controls.json",
+              "validation/time_reversal_resolved.json",
+          ]]
+          missing = [f for f in needed if not pathlib.Path(f).exists()]
+          for f in needed:
+              print(("ok    " if f not in missing else "MISSING"), f)
+          if missing:
+              print("\nThe published data.zip is out of date. Re-upload it from "
+                    "the repo root (Drive > Manage versions > Upload new version, "
+                    "so the file id stays the same).")
+          sys.exit(1 if missing else 0)
+          PY
+      - name: Execute every notebook
+        run: |
+          python - <<'PY'
+          import glob, pathlib, subprocess, sys, tempfile, time
+
+          out = tempfile.mkdtemp()
+          notebooks = sorted(glob.glob("notebooks/**/*.ipynb", recursive=True))
+          if not notebooks:
+              print("no notebooks found"); sys.exit(1)
+
+          failed = []
+          for nb in notebooks:
+              t0 = time.time()
+              # Executed out of place: CI must not rewrite the committed
+              # outputs, only prove they can be regenerated.
+              r = subprocess.run(
+                  ["jupyter", "nbconvert", "--to", "notebook", "--execute", nb,
+                   "--output-dir", out, "--ExecutePreprocessor.timeout=900"],
+                  capture_output=True, text=True)
+              dt = time.time() - t0
+              if r.returncode == 0:
+                  print(f"ok    {nb}  ({dt:.0f}s)", flush=True)
+              else:
+                  failed.append(nb)
+                  print(f"FAIL  {nb}  ({dt:.0f}s)", flush=True)
+                  print(r.stderr[-3000:], flush=True)
+
+          print(f"\n{len(notebooks) - len(failed)}/{len(notebooks)} notebooks ran")
+          sys.exit(1 if failed else 0)
+          PY

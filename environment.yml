@@ -1,0 +1,12 @@
+# Conda environment for reproducing the RUBRIC paper analysis.
+# The package versions are pinned in requirements.txt (analysis) and
+# requirements-engine.txt (RUBRIC engine), so pip and conda installs match.
+name: rubric-analysis
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+      - -r requirements.txt
+      - -r requirements-engine.txt
