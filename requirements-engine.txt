@@ -1,2 +1,2 @@
-# The RUBRIC engine version that produced the data in this repository (Level 3).
-rubric-rna==0.1.0
+# The RUBRIC engine version that produced the data in this repository.
+rubric-rna==1.0

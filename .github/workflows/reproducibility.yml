@@ -12,23 +12,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  code-integrity:
-    name: install + notebooks valid + scripts import (${{ matrix.os }}, Python ${{ matrix.python }})
+  code:
+    name: install + notebooks valid + scripts import + tests (${{ matrix.os }}, Python ${{ matrix.python }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-24.04, macos-latest]
         # 3.11 is the oldest Python the pinned numpy, pandas and scipy support.
         python: ["3.11", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.1.0
         with:
           python-version: ${{ matrix.python }}
-      - name: Install requirements
-        run: pip install -r requirements.txt
+      - name: Install requirements and the RUBRIC engine
+        run: pip install -r requirements.txt -r requirements-engine.txt
       - name: Notebooks are valid
         run: |
           python - <<'PY'
@@ -45,10 +45,8 @@ jobs:
         run: |
           python - <<'PY'
           import glob, subprocess, sys
-          # Each script is imported in a fresh interpreter with its own folder first
-          # on sys.path, exactly as `python path/to/script.py` would see it. One
-          # shared process breaks sibling imports and lets scripts/data_gen/_vendor
-          # shadow scripts/validation/_vendor.
+          # Each script is imported in a fresh interpreter with its own folder first on
+          # sys.path, as `python path/to/script.py` would see it.
           CHECK = (
               "import importlib.util, pathlib, sys\n"
               "f = pathlib.Path(sys.argv[1]).resolve()\n"
@@ -59,17 +57,10 @@ jobs:
           )
           bad = 0
           for f in sorted(glob.glob("scripts/**/*.py", recursive=True)):
-              # _vendor/* are package internals (relative imports); they are
-              # exercised transitively by the build_* scripts, not standalone.
+              # _vendor/* are package internals, imported by the scripts that use them.
               if "/_vendor/" in f.replace("\\", "/"):
                   continue
-              # reference/* drive the RUBRIC engine repos, which are expected as
-              # siblings of this checkout and are not present on the runner.
-              # Syntax is still checked below.
-              if "/reference/" in f.replace("\\", "/"):
-                  continue
-              r = subprocess.run([sys.executable, "-c", CHECK, f],
-                                 capture_output=True, text=True)
+              r = subprocess.run([sys.executable, "-c", CHECK, f], capture_output=True, text=True)
               if r.returncode == 0:
                   print("ok  ", f)
               else:
@@ -77,139 +68,45 @@ jobs:
                   print("FAIL", f, err[-1] if err else f"exit {r.returncode}"); bad = 1
           sys.exit(bad)
           PY
-      - name: Engine-driven scripts compile
-        run: |
-          python - <<'PY'
-          import glob, py_compile, sys
-          bad = 0
-          for f in sorted(glob.glob("scripts/reference/*.py")):
-              try:
-                  py_compile.compile(f, doraise=True); print("ok  ", f)
-              except Exception as e:
-                  print("FAIL", f, type(e).__name__, e); bad = 1
-          sys.exit(bad)
-          PY
+      - name: Run the tests
+        run: pytest -q
 
-  changes:
-    name: detect fetch-related changes
-    runs-on: ubuntu-latest
-    outputs:
-      fetch: ${{ steps.filter.outputs.fetch }}
-      notebooks: ${{ steps.filter.outputs.notebooks }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
-        id: filter
-        if: github.event_name == 'push' || github.event_name == 'pull_request'
-        with:
-          filters: |
-            fetch:
-              - 'scripts/fetch_data.sh'
-              - '.github/workflows/reproducibility.yml'
-            notebooks:
-              - 'notebooks/**'
-              - 'requirements.txt'
-              - 'scripts/fetch_data.sh'
-              - '.github/workflows/reproducibility.yml'
-
-  data-fetch:
-    name: fetch_data.sh (${{ matrix.os }}, ${{ matrix.downloader }})
-    needs: changes
-    if: needs.changes.outputs.fetch == 'true' || github.event_name == 'workflow_dispatch'
+  fetch:
+    name: fetch_data.sh (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
-        downloader: [curl, gdown]
+        os: [ubuntu-24.04, macos-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install gdown (gdown leg only)
-        if: matrix.downloader == 'gdown'
-        run: pip install gdown
+      - uses: actions/checkout@v7.0.1
       - name: Fetch the data archive
         run: bash scripts/fetch_data.sh
-      - name: Assert data/ landed in the right place
+      - name: A second run adds nothing and leaves no download behind
         run: |
-          python - <<'PY'
-          import pathlib, sys
-          expect = [
-              "data/reference/scoring_tables",
-              "data/comparison",
-              "data/validation",
-          ]
-          bad = 0
-          for d in expect:
-              p = pathlib.Path(d)
-              ok = p.is_dir() and any(p.iterdir())
-              print(("ok  " if ok else "FAIL"), d)
-              bad |= not ok
-          if pathlib.Path("data.zip").exists():
-              print("FAIL data.zip was not removed"); bad = 1
-          sys.exit(bad)
-          PY
+          bash scripts/fetch_data.sh
+          test ! -e .downloads
+      - name: data/ landed in the right place
+        run: |
+          for d in data/reference/scoring_tables data/comparison data/validation data/benchmark data/pymol/renders; do
+            if [ -d "$d" ] && [ -n "$(ls -A "$d")" ]; then echo "ok   $d"; else echo "FAIL $d"; exit 1; fi
+          done
 
-  engine-reproducibility:
-    name: install engine + regenerate features (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
+  notebooks:
+    name: fetch data + run every notebook, as a new user
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.1.0
         with:
           python-version: "3.12"
       - name: Install requirements and the RUBRIC engine
         run: pip install -r requirements.txt -r requirements-engine.txt
-      - name: Extract features for the 2 fixture structures
-        run: |
-          cd scripts/data_gen
-          python extract_pair_features.py \
-            --reference-set ../../.github/fixtures/mini_reference_set.json \
-            --output-dir "$RUNNER_TEMP/feat" --workers 2
-          python extract_backbone_torsions.py \
-            --reference-set ../../.github/fixtures/mini_reference_set.json \
-            --output "$RUNNER_TEMP/feat/torsions_all.csv" --workers 2
-      - name: Assert the tables were produced
-        run: |
-          python - <<'PY'
-          import os, pathlib, sys, pandas as pd
-          feat = pathlib.Path(os.environ["RUNNER_TEMP"]) / "feat"
-          ok = True
-          for f in ["pairs.csv", "hbonds.csv", "torsions.csv", "torsions_all.csv"]:
-              p = feat / f
-              n = len(pd.read_csv(p)) if p.exists() else 0
-              print(("ok  " if n > 0 else "FAIL"), f, n, "rows")
-              ok = ok and n > 0
-          sys.exit(0 if ok else 1)
-          PY
-
-  notebooks-run:
-    name: fetch data + execute every notebook
-    needs: changes
-    if: >-
-      needs.changes.outputs.notebooks == 'true' ||
-      github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'schedule'
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install requirements
-        run: pip install -r requirements.txt
       - name: Fetch the data archive
         run: bash scripts/fetch_data.sh
-      - name: Archive contains what the notebooks read
+      - name: The archive contains what the notebooks read
         run: |
           python - <<'PY'
           import pathlib, sys
@@ -248,23 +145,20 @@ jobs:
               "validation/annotator_consensus.json",
               "validation/annotator_consensus_shared.json",
               "validation/pdb_redo_pairs_comparison.json",
-              "validation/rejection_referee_support.json",
               "validation/time_reversal_controls.json",
               "validation/time_reversal_resolved.json",
           ]]
           missing = [f for f in needed if not pathlib.Path(f).exists()]
           for f in needed:
-              print(("ok    " if f not in missing else "MISSING"), f)
-          if missing:
-              print("\nThe published data.zip is out of date. Re-upload it from "
-                    "the repo root (Drive > Manage versions > Upload new version, "
-                    "so the file id stays the same).")
+              print(("ok     " if f not in missing else "MISSING"), f)
           sys.exit(1 if missing else 0)
           PY
+      - name: Run the tests
+        run: pytest -q
       - name: Execute every notebook
         run: |
           python - <<'PY'
-          import glob, pathlib, subprocess, sys, tempfile, time
+          import glob, subprocess, sys, tempfile, time
 
           out = tempfile.mkdtemp()
           notebooks = sorted(glob.glob("notebooks/**/*.ipynb", recursive=True))
@@ -274,11 +168,10 @@ jobs:
           failed = []
           for nb in notebooks:
               t0 = time.time()
-              # Executed out of place: CI must not rewrite the committed
-              # outputs, only prove they can be regenerated.
+              # Executed out of place, so the committed notebooks keep their outputs.
               r = subprocess.run(
                   ["jupyter", "nbconvert", "--to", "notebook", "--execute", nb,
-                   "--output-dir", out, "--ExecutePreprocessor.timeout=900"],
+                   "--output-dir", out, "--ExecutePreprocessor.timeout=1800"],
                   capture_output=True, text=True)
               dt = time.time() - t0
               if r.returncode == 0:
@@ -291,3 +184,66 @@ jobs:
           print(f"\n{len(notebooks) - len(failed)}/{len(notebooks)} notebooks ran")
           sys.exit(1 if failed else 0)
           PY
+
+  engine:
+    name: install the engine + extract features (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest]
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Install requirements and the RUBRIC engine
+        run: pip install -r requirements.txt -r requirements-engine.txt
+      - name: Extract features for the 2 fixture structures
+        run: |
+          cd scripts/data_gen
+          python extract_pair_features.py \
+            --reference-set ../../.github/fixtures/mini_reference_set.json \
+            --output-dir "$RUNNER_TEMP/feat" --workers 2
+          python extract_backbone_torsions.py \
+            --reference-set ../../.github/fixtures/mini_reference_set.json \
+            --output "$RUNNER_TEMP/feat/torsions_all.csv" --workers 2
+      - name: The tables were produced
+        run: |
+          python - <<'PY'
+          import os, pathlib, sys, pandas as pd
+          feat = pathlib.Path(os.environ["RUNNER_TEMP"]) / "feat"
+          ok = True
+          for f in ["pairs.csv", "hbonds.csv", "torsions.csv", "torsions_all.csv"]:
+              p = feat / f
+              n = len(pd.read_csv(p)) if p.exists() else 0
+              print(("ok  " if n > 0 else "FAIL"), f, n, "rows")
+              ok = ok and n > 0
+          sys.exit(0 if ok else 1)
+          PY
+
+  archives:
+    name: fetch the structure and program-run archives
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      # The structures unpack to about 14 GB, more than a runner has free, so remove
+      # preinstalled toolchains this job does not use.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+      - uses: actions/checkout@v7.0.1
+      - name: Fetch all three archives
+        run: bash scripts/fetch_data.sh all
+      - name: The archives landed in the right place
+        run: |
+          n=$(find data/structures -maxdepth 1 -name "*.cif*" | wc -l)
+          echo "structure files in data/structures: $n"
+          test "$n" -ge 2696
+          for d in data/structures/nmr data/structures/engine_cache data/validation/redo_files \
+                   data/comparison/program_runs/pairs data/comparison/program_runs/raw; do
+            if [ -d "$d" ] && [ -n "$(ls -A "$d")" ]; then echo "ok   $d"; else echo "FAIL $d"; exit 1; fi
+          done

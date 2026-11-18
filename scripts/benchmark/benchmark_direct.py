@@ -181,7 +181,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--config", type=Path, default=ROOT / ".runtime-tools/config.json")
     ap.add_argument("--input", type=Path, default=ROOT / "data/structures",
-                    help="folder of <ID>.cif files (scripts/fetch_structures.py)")
+                    help="folder of <ID>.cif files (data/structures, from rubric_structures.zip)")
     ap.add_argument("--cohort", type=Path, default=ROOT / "data/benchmark/dssr_RUBRIC_time_benchmark.csv")
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--tools", default=",".join(common.TOOLS))
@@ -221,7 +221,7 @@ def main():
     missing = [r["pdb"] for r in rows if not (args.input / f"{r['pdb']}.cif").is_file()]
     if missing:
         ap.error(f"{len(missing)} structures missing from {args.input}, e.g. {missing[:5]}; "
-                 "run scripts/fetch_structures.py")
+                 "fetch them with: bash scripts/fetch_data.sh structures")
     for row in rows:
         source = (args.input / f"{row['pdb']}.cif").resolve()
         row.update(source_path=str(source), size=source.stat().st_size)

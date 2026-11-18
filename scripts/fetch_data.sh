@@ -1,31 +1,42 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-FILE_ID="${RUBRIC_DATA_FILE_ID:-1ozLbscHg8NFYVoURuIDklLKOApB7xu8P}"
+BASE_URL="${RUBRIC_DATA_URL:-https://zenodo.org/records/24214090/files}"
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-ZIP="$REPO_ROOT/data.zip"
-DEST="$REPO_ROOT/data"
+DOWNLOADS="$REPO_ROOT/.downloads"
 
-echo "Downloading data.zip from Google Drive..."
-if command -v gdown >/dev/null 2>&1; then
-    gdown "https://drive.google.com/uc?id=${FILE_ID}" -O "$ZIP"
-else
-    BASE="https://drive.usercontent.google.com/download?id=${FILE_ID}&export=download"
-    UUID="$(curl -sL "$BASE" \
-        | grep -o 'name="uuid" value="[^"]*"' | sed 's/.*value="//;s/"//')"
-    curl -L "${BASE}&confirm=t&uuid=${UUID}" -o "$ZIP"
-fi
+fetch() {
+    local file="rubric_$1.zip"
+    local archive="$DOWNLOADS/$file"
+    local url="$BASE_URL/$file?download=1"
+    if [[ -f "$archive" ]] && unzip -tq "$archive" >/dev/null 2>&1; then
+        echo "$file is already downloaded."
+    else
+        echo "Downloading $file from Zenodo..."
+        mkdir -p "$DOWNLOADS"
+        if ! curl -L --fail --retry 5 --retry-delay 10 -C - -o "$archive" "$url"; then
+            echo "Could not download $file. Run the script again to resume the download." >&2
+            exit 1
+        fi
+    fi
+    if ! unzip -tq "$archive" >/dev/null 2>&1; then
+        echo "$file is not a valid archive (got $(wc -c <"$archive") bytes)." >&2
+        rm -f "$archive"
+        exit 1
+    fi
+    echo "Adding the files of $file that are not yet in $REPO_ROOT/data ..."
+    unzip -qn "$archive" -d "$REPO_ROOT"
+    rm -f "$archive"
+    rmdir "$DOWNLOADS" 2>/dev/null || true
+}
 
-if ! unzip -tq "$ZIP" >/dev/null 2>&1; then
-    echo "Downloaded file is not a valid zip (got $(wc -c <"$ZIP") bytes)." >&2
-    echo "Check that the Drive link is shared 'Anyone with the link', or that" >&2
-    echo "the daily download quota was not exceeded, then retry." >&2
-    rm -f "$ZIP"
-    exit 1
-fi
-
-echo "Unzipping into $DEST (stale files refreshed, newer local files kept) ..."
-unzip -quo "$ZIP" -d "$REPO_ROOT"
-rm -f "$ZIP"
-echo "Done. All data is in $DEST"
+case "${1:-data}" in
+    data | structures | program_runs) fetch "${1:-data}" ;;
+    all) for name in data structures program_runs; do fetch "$name"; done ;;
+    *)
+        echo "Usage: bash scripts/fetch_data.sh [data | structures | program_runs | all]" >&2
+        exit 1
+        ;;
+esac
+echo "Done."

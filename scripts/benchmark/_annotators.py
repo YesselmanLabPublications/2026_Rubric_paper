@@ -1,43 +1,15 @@
-"""Offline runtime adapters for the annotators in the runtime benchmark."""
-import argparse
-import json
-import math
-import os
+"""Parsers and chain-renaming helpers for the annotators' output, shared by the comparison
+scripts (run_programs.py, convert_outputs.py) and the runtime benchmark (benchmark_direct.py)."""
 import re
-import shutil
 import string
-import subprocess
-import tempfile
-import warnings
-from concurrent.futures import ProcessPoolExecutor
 from itertools import combinations
-from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent.parent
-COMPARISON_DIR = REPO / "data" / "comparison"
-LOCAL_CIFS = Path(".")
-RNAVIEW_HOME = Path.home() / "local" / "installs" / "RNAView"
-RNAVIEW_BIN = RNAVIEW_HOME / "bin" / "rnaview"
-PDB_CACHE = Path(tempfile.gettempdir()) / "rubric_barnaba_pdbs"
 
 RV_LINE = re.compile(
     r"^\s*\S+,\s+(\S+):\s+(-?\d+\w?)\s+(\S)-(\S)\s+(-?\d+\w?)\s+(\S+):\s+(\S)/(\S)\s+(cis|tran)"
 )
 
 ALIAS_POOL = string.ascii_uppercase + string.digits + string.ascii_lowercase
-
-
-def candidate_ids() -> list[str]:
-    ids = set()
-    for f in sorted(COMPARISON_DIR.glob("[ct][WHS][WHS].json")):
-        for r in json.load(open(f)).get("differences", []):
-            ids.add(r["pdb_id"].upper()[:4])
-    return sorted(ids)
-
-
-def get_cif(pdb: str, workdir: Path) -> Path | None:
-    local = LOCAL_CIFS / f"{pdb}.cif"
-    return local if local.is_file() else None
 
 
 class TooManyChains(Exception):
@@ -142,75 +114,6 @@ def alias_cif_chains(text: str) -> tuple[str, dict[str, str]] | None:
     return "\n".join(out) + "\n", reverse
 
 
-NT_RING = ("N1", "C2", "C6")
-NT_CUTOFFS = ((0, 1, 2.0), (0, 2, 2.0), (1, 2, 3.0))
-
-
-def _rnaview_nucleotides(lines: list[str], cols: dict[str, int]) -> list[tuple]:
-    order: list[tuple] = []
-    ring: dict[tuple, dict[str, tuple[float, float, float]]] = {}
-    for line in lines:
-        if not line.startswith(("ATOM", "HETATM")):
-            continue
-        tok = line.split()
-        key = (tok[cols["auth_asym_id"]], tok[cols["auth_seq_id"]],
-               tok[cols["auth_comp_id"]], tok[cols["pdbx_PDB_ins_code"]])
-        if key not in ring:
-            ring[key] = {}
-            order.append(key)
-        name = tok[cols["label_atom_id"]].strip('"')
-        if name in NT_RING and name not in ring[key]:
-            ring[key][name] = (float(tok[cols["Cartn_x"]]), float(tok[cols["Cartn_y"]]),
-                               float(tok[cols["Cartn_z"]]))
-    out = []
-    for key in order:
-        atoms = ring[key]
-        if len(atoms) == len(NT_RING) and all(
-            math.dist(atoms[NT_RING[i]], atoms[NT_RING[j]]) <= cut
-            for i, j, cut in NT_CUTOFFS
-        ):
-            out.append(key)
-    return out
-
-
-def drop_lone_nucleotides(text: str) -> str | None:
-    lines = text.splitlines()
-    tags = _atom_site_tags(lines)
-    needed = ("auth_asym_id", "auth_seq_id", "auth_comp_id", "pdbx_PDB_ins_code",
-              "label_atom_id", "Cartn_x", "Cartn_y", "Cartn_z")
-    if any(t not in tags for t in needed):
-        return None
-    cols = {t: tags.index(t) for t in needed}
-    nucleotides = _rnaview_nucleotides(lines, cols)
-    drop: set[tuple] = set()
-    while True:
-        runs: list[list[tuple]] = []
-        for key in nucleotides:
-            if key in drop:
-                continue
-            if runs and runs[-1][-1][0] == key[0]:
-                runs[-1].append(key)
-            else:
-                runs.append([key])
-        lone = {run[0] for run in runs if len(run) == 1}
-        if not lone:
-            break
-        drop |= lone
-    if not drop:
-        return None
-    keep = [
-        line for line in lines
-        if not (line.startswith(("ATOM", "HETATM")) and _residue_key(line, cols) in drop)
-    ]
-    return "\n".join(keep) + "\n"
-
-
-def _residue_key(line: str, cols: dict[str, int]) -> tuple:
-    tok = line.split()
-    return (tok[cols["auth_asym_id"]], tok[cols["auth_seq_id"]],
-            tok[cols["auth_comp_id"]], tok[cols["pdbx_PDB_ins_code"]])
-
-
 def _parse_rnaview_out(text: str, reverse: dict[str, str] | None) -> list[list]:
     pairs, in_bp = [], False
     for line in text.splitlines():
@@ -238,25 +141,6 @@ def _parse_rnaview_out(text: str, reverse: dict[str, str] | None) -> list[list]:
     return pairs
 
 
-def _run_rnaview(work: Path, target: Path) -> tuple[str | None, str, bool]:
-    try:
-        proc = subprocess.run(
-            [str(RNAVIEW_BIN), "--cif", target.name],
-            cwd=work, capture_output=True, timeout=600,
-            env={**os.environ, "RNAVIEW": str(RNAVIEW_HOME)},
-        )
-    except subprocess.TimeoutExpired:
-        return None, "timeout", False
-    signalled = proc.returncode != 0
-    out = work / f"{target.name}.out"
-    if not out.exists() or out.stat().st_size == 0:
-        return None, "fail_rnaview_crash", signalled
-    text = out.read_text(errors="replace")
-    if "END_base-pair" not in text:
-        return None, "fail_rnaview_truncated", signalled
-    return text, "ok", signalled
-
-
 def _group_cif(lines: list[str], auth_i: int, alias: dict[str, str]) -> str:
     out = []
     for line in lines:
@@ -270,93 +154,6 @@ def _group_cif(lines: list[str], auth_i: int, alias: dict[str, str]) -> str:
     return "\n".join(out) + "\n"
 
 
-def _rnaview_group_pass(pdb: str, lines: list[str], auth_i: int, names: list[str],
-                        size: int, work: Path) -> tuple[list[list], bool] | None:
-    pairs: list[list] = []
-    signalled = False
-    for g, group in enumerate(chain_groups(names, size)):
-        alias = _build_alias(group, set(group))
-        target = work / f"{pdb}_s{size}_g{g}.cif"
-        target.write_text(_group_cif(lines, auth_i, alias))
-        out_text, _status, sig = _run_rnaview(work, target)
-        signalled |= sig
-        if out_text is None:
-            return None
-        pairs += _parse_rnaview_out(out_text, {a: c for c, a in alias.items()})
-    return pairs, signalled
-
-
-def _ok_record(via: str | None, pairs: list[list], signalled: bool = False) -> dict:
-    record: dict = {"status": "ok"}
-    if via is not None:
-        record["via"] = via
-    if signalled:
-        record["exit"] = "signal_after_complete_output"
-    record["pairs"] = pairs
-    return record
-
-
-def _rnaview_grouped(pdb: str, text: str, work: Path, via: str | None) -> tuple[str, dict]:
-    lines = text.splitlines()
-    auth_i, _atom_i, _chains, nucleic = _atom_site_scan(lines)
-    tag = "cif_groups" if via is None else f"{via}_cif_groups"
-    size = len(ALIAS_POOL)
-    while size >= 2:
-        try:
-            done = _rnaview_group_pass(pdb, lines, auth_i, sorted(nucleic), size, work)
-        except KeyError:
-            return pdb, {"status": "fail_alias_leak", "pairs": []}
-        if done is not None:
-            pairs, signalled = done
-            return pdb, _ok_record(tag, _dedupe_pairs(pairs), signalled)
-        size //= 2
-    return pdb, {"status": "fail_rnaview_crash", "pairs": []}
-
-
-def _rnaview_attempt(pdb: str, cif: Path, text: str, work: Path,
-                     via: str | None) -> tuple[str, dict]:
-    target = work / f"{pdb}.cif"
-    try:
-        aliased = alias_cif_chains(text)
-    except TooManyChains:
-        return _rnaview_grouped(pdb, text, work, via)
-    except ValueError:
-        return pdb, {"status": "fail_alias", "pairs": []}
-    reverse = None
-    if aliased is None:
-        if via is None and cif != target:
-            shutil.copy(cif, target)
-        elif via is not None:
-            target.write_text(text)
-    else:
-        aliased_text, reverse = aliased
-        target.write_text(aliased_text)
-    out_text, status, signalled = _run_rnaview(work, target)
-    if out_text is None:
-        return pdb, {"status": status, "pairs": []}
-    try:
-        pairs = _parse_rnaview_out(out_text, reverse)
-    except KeyError:
-        return pdb, {"status": "fail_alias_leak", "pairs": []}
-    return pdb, _ok_record(via, pairs, signalled)
-
-
-def rnaview_one(pdb: str) -> tuple[str, dict]:
-    with tempfile.TemporaryDirectory() as td:
-        work = Path(td)
-        cif = get_cif(pdb, work)
-        if cif is None:
-            return pdb, {"status": "no_cif", "pairs": []}
-        text = cif.read_text(errors="replace")
-        result = _rnaview_attempt(pdb, cif, text, work, None)
-        if result[1]["status"] == "ok":
-            return result
-        stripped = drop_lone_nucleotides(text)
-        if stripped is None:
-            return result
-        return _rnaview_attempt(pdb, cif, stripped, work, "lone_nt_stripped")
-
-
 BARNABA_LW = {"WC": "cWW", "GU": "cWW"}
 
 
@@ -368,174 +165,8 @@ def _barnaba_lw(ann: str) -> str | None:
     return None
 
 
-def _barnaba_rows(chain_ids: list[str], pairings: list, res: list) -> list[list]:
-    rows = []
-    for (i, j), ann in zip(*pairings[0], strict=True):
-        _b1, n1, ci1 = res[i].rsplit("_", 2)
-        _b2, n2, ci2 = res[j].rsplit("_", 2)
-        rows.append([chain_ids[int(ci1)], n1, chain_ids[int(ci2)], n2, _barnaba_lw(ann)])
-    return rows
-
-
-def barnaba_one(pdb: str) -> tuple[str, dict]:
-    warnings.filterwarnings("ignore")
-    return _barnaba_rescue(pdb)
-
-
-def _synth_atom_line(serial: int, at, chain: str, resfield: str, num: int, icode: str) -> str:
-    aname = at.name if len(at.name) == 4 else f" {at.name:<3}"
-    alt = at.altloc if at.altloc and at.altloc != "\x00" else " "
-    element = at.element.name.rjust(2)[:2]
-    return (
-        f"ATOM  {(serial - 1) % 99999 + 1:>5} {aname[:4]}{alt}{resfield}"
-        f"{chain}{num:>4}{icode}   "
-        f"{at.pos.x:8.3f}{at.pos.y:8.3f}{at.pos.z:8.3f}"
-        f"{at.occ:6.2f}{at.b_iso:6.2f}          {element}\n"
-    )
-
-
-def _write_synth_pdb(path: Path, chains: list, alias: dict[str, str]) -> dict[str, dict[int, str]]:
-    num_maps: dict[str, dict[int, str]] = {}
-    serial = 0
-    with path.open("w") as fh:
-        for name, residues in chains:
-            aliased = alias[name]
-            renumber = any(not -999 <= r.seqid.num <= 9999 for r in residues)
-            if renumber:
-                if len(residues) > 9999:
-                    raise ValueError(f"chain {name}: {len(residues)} residues overflow PDB")
-                num_maps[aliased] = {}
-            for k, r in enumerate(residues, 1):
-                num = k if renumber else r.seqid.num
-                if renumber:
-                    num_maps[aliased][num] = str(r.seqid.num)
-                resfield = r.name[:4] if len(r.name) >= 4 else f"{r.name:>3} "
-                icode = r.seqid.icode.strip() or " "
-                for at in r:
-                    serial += 1
-                    fh.write(_synth_atom_line(serial, at, aliased, resfield, num, icode))
-            fh.write("TER\n")
-        fh.write("END\n")
-    return num_maps
-
-
-def _nucleic_chain_residues(cif: Path) -> list:
-    import gemmi
-
-    structure = gemmi.read_structure(str(cif))
-    out = []
-    for chain in structure[0]:
-        residues = [r for r in chain if any(a.name == "C1'" for a in r)]
-        if residues:
-            out.append((chain.name, residues))
-    return out
-
-
-def _map_back(row: list, reverse: dict[str, str], num_maps: dict) -> list:
-    ca1, n1, ca2, n2, lw = row
-    if ca1 in num_maps:
-        n1 = num_maps[ca1][int(n1)]
-    if ca2 in num_maps:
-        n2 = num_maps[ca2][int(n2)]
-    return [reverse[ca1], n1, reverse[ca2], n2, lw]
-
-
-def _barnaba_rescue(pdb: str) -> tuple[str, dict]:
-    with tempfile.TemporaryDirectory() as td:
-        work = Path(td)
-        cif = get_cif(pdb, work)
-        if cif is None:
-            return pdb, {"status": "no_cif", "pairs": []}
-        try:
-            chains = _nucleic_chain_residues(cif)
-        except Exception as e:  # noqa: BLE001
-            return pdb, {"status": f"fail_synth_{type(e).__name__}", "error": str(e), "pairs": []}
-        if not chains:
-            return pdb, {"status": "no_nucleic", "pairs": []}
-        import barnaba as bb
-        import mdtraj as md
-
-        groups = chain_groups([name for name, _ in chains])
-        pairs: list[list] = []
-        for g, group in enumerate(groups):
-            alias = _build_alias(group, set(group))
-            synth = work / f"{pdb}_g{g}.pdb"
-            num_maps = _write_synth_pdb(synth, [c for c in chains if c[0] in group], alias)
-            try:
-                chain_ids = [c.chain_id for c in md.load_topology(str(synth)).chains]
-                if chain_ids != [alias[name] for name in group]:
-                    return pdb, {"status": "fail_mdtraj_chain_split", "pairs": []}
-                _stack, pairings, res = bb.annotate(str(synth))
-            except Exception as e:  # noqa: BLE001
-                return pdb, {"status": f"fail_barnaba_{type(e).__name__}", "error": str(e), "pairs": []}
-            reverse = {a: c for c, a in alias.items()}
-            pairs += [_map_back(r, reverse, num_maps)
-                      for r in _barnaba_rows(chain_ids, pairings, res)]
-        via = "synthetic_pdb" if len(groups) == 1 else "synthetic_pdb_groups"
-        return pdb, {"status": "ok", "via": via, "pairs": _dedupe_pairs(pairs)}
-
-
-def _rnapolis_num(nt) -> str:
-    icode = nt.icode or ""
-    return f"{nt.number}{'' if icode in ('', '?') else icode.strip()}"
-
-
-def rnapolis_one(pdb: str) -> tuple[str, dict]:
-    warnings.filterwarnings("ignore")
-    with tempfile.TemporaryDirectory() as td:
-        cif = get_cif(pdb, Path(td))
-        if cif is None:
-            return pdb, {"status": "no_cif", "pairs": []}
-        try:
-            from rnapolis import annotator
-            from rnapolis import parser as rp_parser
-
-            with open(cif) as fh:
-                structure = rp_parser.read_3d_structure(fh)
-            base_pairs = annotator.extract_base_interactions(structure).base_pairs
-        except Exception as e:  # noqa: BLE001
-            return pdb, {"status": f"fail_{type(e).__name__}", "error": str(e), "pairs": []}
-    pairs = []
-    for bp in base_pairs:
-        lw = bp.lw.value if bp.lw else None
-        if lw is not None and not (
-            len(lw) == 3 and lw[0] in "ct" and lw[1] in "WHS" and lw[2] in "WHS"
-        ):
-            lw = None
-        pairs.append([str(bp.nt1.chain), _rnapolis_num(bp.nt1),
-                      str(bp.nt2.chain), _rnapolis_num(bp.nt2), lw])
-    return pdb, {"status": "ok", "pairs": pairs}
-
-
-BPNET_BIN = Path.home() / "local" / "installs" / "bpnet" / "src" / "bpnet"
-BPNET_SYSFILES = Path.home() / "local" / "installs" / "bpnet" / "sysfiles"
-
-
 def _bpnet_num(num: str, ins: str) -> str:
     return num if ins == "?" else f"{num}{ins}"
-
-
-def bpnet_one(pdb: str) -> tuple[str, dict]:
-    with tempfile.TemporaryDirectory() as td:
-        work = Path(td)
-        cif = get_cif(pdb, work)
-        if cif is None:
-            return pdb, {"status": "no_cif", "pairs": []}
-        target = work / cif.name
-        if cif.parent != work:
-            shutil.copy(cif, target)
-        try:
-            subprocess.run(
-                [str(BPNET_BIN), target.name],
-                cwd=work, capture_output=True, timeout=600,
-                env={**os.environ, "NUCLEIC_ACID_DIR": f"{BPNET_SYSFILES}/"}, check=True,
-            )
-        except subprocess.TimeoutExpired:
-            return pdb, {"status": "timeout", "pairs": []}
-        out = work / f"{pdb}.out"
-        if not out.exists():
-            return pdb, {"status": "fail", "pairs": []}
-        return pdb, {"status": "ok", "pairs": _parse_bpnet_out(out.read_text(errors="replace"))}
 
 
 def _parse_bpnet_out(text: str) -> list[list]:
@@ -560,44 +191,3 @@ def _parse_bpnet_out(text: str) -> list[list]:
                 lw = None
             pairs.append([c1, n1, c2, n2, lw])
     return pairs
-
-
-def fr3d_local_one(pdb: str) -> tuple[str, dict]:
-    import sys
-
-    with tempfile.TemporaryDirectory() as td:
-        work = Path(td)
-        cif = get_cif(pdb, work)
-        if cif is None:
-            return pdb, {"status": "no_cif", "pairs": []}
-        target = work / f"{pdb}.cif"
-        if cif != target:
-            shutil.copy(cif, target)
-        try:
-            subprocess.run(
-                [sys.executable, "-m", "fr3d.classifiers.NA_pairwise_interactions",
-                 "-c", "basepair", "-i", str(work), "-o", str(work), f"{pdb}.cif"],
-                capture_output=True, timeout=1800, check=True,
-            )
-        except subprocess.TimeoutExpired:
-            return pdb, {"status": "timeout", "pairs": []}
-        out = next((p for p in [work / f"{pdb}_basepair.txt", work / f"{pdb}_basepairs.txt"] if p.exists()), work / f"{pdb}_basepair.txt")
-        if not out.exists():
-            return pdb, {"status": "fail", "pairs": []}
-        pairs = []
-        for line in out.read_text(errors="replace").splitlines():
-            tok = line.split("\t")
-            if len(tok) < 3:
-                continue
-            f1, f2 = tok[0].split("|"), tok[2].split("|")
-            if len(f1) < 5 or len(f2) < 5 or f1[1] != "1" or f2[1] != "1":
-                continue
-            lw = tok[1]
-            if lw.startswith("n"):
-                lw = "n" + lw[1] + lw[2:].upper()
-            elif len(lw) == 3:
-                lw = lw[0] + lw[1:].upper()
-            n1 = f1[4] + (f1[7] if len(f1) >= 8 else "")
-            n2 = f2[4] + (f2[7] if len(f2) >= 8 else "")
-            pairs.append([f1[2], n1, f2[2], n2, lw])
-        return pdb, {"status": "ok", "pairs": pairs}

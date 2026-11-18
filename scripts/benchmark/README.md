@@ -1,23 +1,20 @@
 # Direct command-line runtime comparison
 
-Run from the repo root (`RUBRIC-analysis`). All seven tools are installed/configured in
-`.runtime-tools/`, with the existing licensed DSSR executable. The structures are
-read from `data/structures/`; download them first with
-`python scripts/fetch_structures.py` (see the main README).
+Run from the repository root. The seven tools are installed in `.runtime-tools/` by
+`install_tools.py` (see [Installation](#installation-and-custom-inputs)); DSSR needs a
+licensed executable. The structures are read from `data/structures/`, which come with
+`rubric_structures.zip` (see the main README).
 
 ```bash
-# Full original Figure 2 timing cohort: 2,096 original mmCIF files.
+# The Figure 2 timing cohort: 2,096 mmCIF files.
 bash scripts/benchmark/run_all.sh
 # On macOS, keep the machine awake:
 caffeinate -i bash scripts/benchmark/run_all.sh
 ```
 
-The runner now uses `benchmark_direct.py`. It times each tool's native command
-on the **original, unchanged mmCIF file**. There is no model filtering, chain
-renaming, synthetic PDB conversion, grouped annotation, or extra Python worker.
-The previous workflow benchmark was stopped and superseded; its pilot and
-`runtime_all/` preparation are not publication runtime results. Existing Figure 2
-plots and the archived timing CSV remain unchanged.
+The runner, `benchmark_direct.py`, times each tool's native command on the
+**original, unchanged mmCIF file**, with no model filtering, chain renaming,
+synthetic PDB conversion, grouped annotation or extra Python worker.
 
 Results are saved in `data/benchmark/runtime_direct_all/`. Repeating the same
 command resumes completed trials. Use an otherwise idle machine. The full run
@@ -59,34 +56,30 @@ The commands (paths abbreviated) are:
 | RNAView | `rnaview --cif input.cif` |
 | barnaba | `barnaba ANNOTATE --pdb input.cif -o annotation` |
 | RNApolis | `annotator input.cif --json annotation.json` |
-| BPNET | `bpnet input.cif` |
+| BPNet | `bpnet input.cif` |
 
 Despite barnaba's option name, its installed MDTraj reader supports mmCIF
 natively. RNApolis uses its normal CLI, including secondary-structure output;
 its CBC solver dependency is installed. Different programs perform different
 additional work and may handle models differently by default. These measurements
 represent the stated commands on identical files, not identical internal kernels.
-Record the commands in the manuscript.
 
-RUBRIC and DSSR use the original Figure 2 command options and three measured
-repeats. Instead of warm-up runs, each input file is read in full (its checksum),
+Every tool runs three measured repeats. Instead of warm-up runs, each input file is read in full (its checksum),
 untimed, just before the structure's first trial, so no tool pays for the disk
 read (`--warmups N` restores untimed warm-up runs). Every repeat uses seeded
 random tool order. Common BLAS/OpenMP thread settings are capped at one, so each
 tool process uses one core; running 4 structures at once changed the median
 times of a one-at-a-time pilot by -7% to +6% (one RNAView time on a 48-nt
 structure, 0.08 s, by +30%).
-The new summary reports medians; the old Figure 2 table used arithmetic means.
-Raw repeat times are saved so either statistic can be calculated consistently
-for all tools. Rerunning the same commands does not guarantee the old numeric
-timings: software builds, machine load, and measurement details can differ.
-Do not mix old and new timing protocols in a single speedup calculation.
+The summary reports medians; the raw repeat times are saved, so other statistics
+can be computed from them. Rerunning the commands gives similar but not identical
+timings, because software builds, machine load and measurement details differ.
 
 Native failures, unsupported input, missing/incomplete output, nonzero exits,
 and timeouts are recorded without changing the input or retrying through a
 conversion pipeline. A tool/structure is eligible for speedups only if every
 measured repeat succeeds with consistent annotation output. Valid zero-pair
-outputs are allowed. Report coverage alongside speedups.
+outputs are allowed. Coverage is reported alongside the speedups (`coverage.csv`).
 
 `speedup = competitor median / RUBRIC median` for the same structure. Values
 above one mean RUBRIC is faster. Both RUBRIC modes are supplied as baselines.
@@ -96,7 +89,7 @@ are not an accuracy comparison across tools.
 ## Installation and custom inputs
 
 Requirements: macOS or Linux, Python 3.12, Git, CMake, make, GNU C/C++ and
-Fortran, the RUBRIC engine source at tag `v0.1.0` (`git clone --branch v0.1.0 https://github.com/YesselmanLab/RUBRIC` into `RUBRIC/`, or `--rubric-source`; the timings build the engine from source rather than using the pip package), the mmCIF inputs in
+Fortran, the RUBRIC engine source at tag `v1.0` (`git clone --branch v1.0 https://github.com/YesselmanLab/RUBRIC` into `RUBRIC/`, or `--rubric-source`; the timings build the engine from source rather than using the pip package), the mmCIF inputs in
 `data/structures/`, and a licensed DSSR executable. On macOS, build prerequisites can be installed with
 `brew install python@3.12 cmake gcc`.
 
@@ -107,7 +100,7 @@ python3 scripts/benchmark/install_tools.py --check
 bash scripts/benchmark/run_all.sh --pilot
 ```
 
-The installer uses pinned Python packages and pinned RNAView/BPNET/FR3D
+The installer uses pinned Python packages and pinned RNAView/BPNet/FR3D
 revisions. NumPy 2.2.6 supplies the API needed by barnaba 0.1.9. PuLP is pinned to
 3.3.2, whose bundled CBC is the solver RNApolis uses: PuLP 4 made `LpVariable`
 bounds keyword-only, which crashes RNApolis 0.16.17 whenever it calls its
@@ -142,11 +135,8 @@ Trials are flushed individually; a partial final record after interruption is
 preserved and retried. A normal interruption also terminates the active tool's
 process group.
 
-```bash
-.runtime-tools/venv/bin/python -m unittest discover \
-  -s scripts/benchmark -p 'test_*.py' -v
-```
-
-Tests cover the direct command contract, unchanged input bytes, timing boundaries,
-output validation, failure exclusion, matched ratios, interrupted records, and
-process cleanup. The direct pilot exercises the actual installed commands.
+The runner's tests are in `tests/test_benchmark_direct.py` and run with the rest of
+the test suite (`pytest` from the repository root). They cover the direct command
+contract, unchanged input bytes, timing boundaries, output validation, failure
+exclusion, matched ratios, interrupted records and process cleanup. The pilot
+exercises the actual installed commands.

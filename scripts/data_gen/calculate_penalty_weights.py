@@ -315,26 +315,8 @@ def main():
         print(f"  {grp:25s}: {total_w:6.2f}  ({details})")
 
     output = {
-        "schema_version": "4.0-per-parameter-shannon",
         "weight_scheme": "shannon-log-odds-per-parameter",
         "method": {
-            "_documentation": [
-                "Per-parameter penalty weights using pure Shannon (log-odds) approach.",
-                "",
-                "For each of the 9 parameters individually:",
-                "  - Compute mean Cerny severity in GOOD set vs POOR set",
-                "  - weight_i = log(s_poor_i / s_good_i)  [clipped to >= 0]",
-                "  - Renormalize to sum = 100",
-                "",
-                "Severity (Cerny et al. NAR 2026 gkaf1335, ramped off the boundary):",
-                "  - severity = 0 if ProSco >= 5 (Preferred)",
-                "  - severity = min(1, |Z'|/5) * clamp((5 - ProSco)/5, 0, 1) otherwise",
-                "  - clash    = clamp((overlap - 0.4)/(0.9 - 0.4), 0, 1)",
-                "",
-                "At runtime:",
-                "    penalty = Σ penalty_weights[param] × severity[param]",
-                "    score   = max(0, min(100, 100 − penalty))",
-            ],
             "severity_definition": "Cerny ramped: 0 if ProSco >= 5, else "
                                    "min(1, |Z'|/5) * clamp((5 - ProSco)/5, 0, 1); "
                                    "clash: clamp((overlap - 0.4)/(0.9 - 0.4), 0, 1)",

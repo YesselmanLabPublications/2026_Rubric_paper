@@ -13,7 +13,7 @@ stays the single place where the pairs are defined. The notebooks only read the 
 above, so they run without PyMOL or the structure files. Fig. S8 shows bases and riboses
 (thin ribose bonds); Fig. S9 shows bases with the C1' stub only, as in Figures 3 and 4.
 
-Needs PyMOL and the mmCIF files in data/structures (see scripts/fetch_structures.py).
+Needs PyMOL and the mmCIF files in data/structures (bash scripts/fetch_data.sh structures).
 
 Usage (from the repo root):  python scripts/pymol_figures/render_pair_examples.py [S8] [S9]
 """

@@ -37,7 +37,6 @@ def extract_one(pdb_id: str, d: dict) -> tuple[list, list, list]:
             "plane_angle": p["geometry"]["plane_angle"],
             "template_rmsd": p.get("template_rmsd"),
             "num_hbonds": p["num_hbonds"], "num_base_hbonds": n_base,
-            "quality_score": p["quality_score"],
             "clash_overlap": p.get("clash_overlap"),
         })
         for hb in p.get("hbonds", []):

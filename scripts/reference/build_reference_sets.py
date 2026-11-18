@@ -98,11 +98,10 @@ def main():
                 "by_method": by}
 
     (SETS / "reference_set.json").write_text(json.dumps(
-        {"schema_version": "3.0", "criteria": criteria,
+        {"criteria": criteria,
          "summary": summary(good), "pdbs": good}, indent=1))
     (SETS / "reference_set_poor.json").write_text(json.dumps(
-        {"schema_version": "3.0",
-         "definition": "representative entry with >= 1 nucleotide that is not in the curated set",
+        {"definition": "representative entry with >= 1 nucleotide that is not in the curated set",
          "summary": summary(poor), "skipped": skipped, "pdbs": poor}, indent=1))
     print(f"representative entries {len(unique)} | curated {len(good)} {summary(good)['by_method']} "
           f"| non-curated {len(poor)} {summary(poor)['by_method']}")

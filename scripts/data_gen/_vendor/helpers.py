@@ -1,4 +1,4 @@
-"""Small helpers vendored from pair_finder so the build scripts are self-contained."""
+"""Small helpers bundled with the build scripts so they are self-contained."""
 import re
 
 REPORT_GROUPS = {

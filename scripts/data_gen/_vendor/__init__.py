@@ -1,1 +1,1 @@
-"""Vendored pair_finder helpers so the scoring-table build scripts need no external repo."""
+"""Helpers bundled with the scoring-table build scripts so they need no other package."""

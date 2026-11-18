@@ -1,4 +1,4 @@
-"""Per-molecule before/after values of the better-resolution cohort (Figure 4A-D).
+"""Per-molecule before/after values of the higher-resolution cohort (Figure 4A-D).
 
 One row per molecule of resolve_strict.csv, giving the value of every measure for the
 worse-resolved (_w) and better-resolved (_b) structure. Suite, unassigned-suite and

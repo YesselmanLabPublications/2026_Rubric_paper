@@ -170,7 +170,6 @@ def main() -> None:
     ps = {"original": _stat([r["original"]["pairs_score"] for r in results if r["original"]["pairs_score"] is not None]),
           "redo": _stat([r["redo"]["pairs_score"] for r in results if r["redo"]["pairs_score"] is not None])} if results else {}
     all_payload = {
-        "schema_version": "3.0",
         "method": {
             "_documentation": [
                 "Structure-level scores on original (RCSB) vs PDB-REDO coordinates,",
@@ -200,7 +199,6 @@ def main() -> None:
     else:
         pair_summary = {"n_structures": 0, "n_pairs_matched": 0}
     pairs_payload = {
-        "schema_version": "2.0",
         "method": {
             "_documentation": [
                 "Per matched base pair: score on original vs PDB-REDO coordinates,",

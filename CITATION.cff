@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the paper below."
+title: "Analysis code for: RUBRIC: rapid quality assessment tool of RNA 3D structures"
+authors:
+  - family-names: Dewan
+    given-names: Kamshinen J.
+  - family-names: Yesselman
+    given-names: Joseph D.
+    email: jyesselm@unl.edu
+    affiliation: "University of Nebraska-Lincoln"
+license: MIT
+doi: 10.5281/zenodo.24324880
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.24214090
+    description: "Data archive on Zenodo"
+repository-code: "https://github.com/YesselmanLabPublications/2026_Rubric_paper"
+keywords:
+  - RNA
+  - structure validation
+  - base pairs
+  - Leontis-Westhof
+  - backbone conformers

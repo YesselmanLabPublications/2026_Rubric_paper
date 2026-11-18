@@ -9,7 +9,8 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from scipy.stats import gaussian_kde
+from scipy.signal import fftconvolve
+from scipy.stats import gaussian_kde, norm
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 from _vendor.canonical import (  # noqa: E402
@@ -61,8 +62,47 @@ def per_pdb_weights(pdb_ids: pd.Series) -> np.ndarray:
     return np.array([1.0 / counts[p] for p in pdb_ids])
 
 
+def ucv_bandwidth(x: np.ndarray, w: np.ndarray, h0: float) -> tuple[float, bool]:
+    """Bandwidth minimizing the weighted unbiased (least-squares) cross-validation score,
+    searched over 0.03-3 times h0 (Scott's rule). Also returns whether the minimum lies
+    at the edge of the search range."""
+    w = w / w.sum()
+    hs = h0 * np.logspace(np.log10(0.03), np.log10(3.0), 45)
+    hs = hs[hs > 5e-4 * max(np.ptp(x), 1e-9)]
+    if len(x) <= 500:
+        d = x[:, None] - x[None, :]
+        scores = []
+        for h in hs:
+            int_f2 = w @ norm.pdf(d, scale=np.sqrt(2) * h) @ w
+            s = norm.pdf(d, scale=h) @ w - w * norm.pdf(0, scale=h)
+            scores.append(int_f2 - 2 * np.sum(w * s / (1 - w)))
+    else:
+        # Linear binning on a fine grid; the kernel sums are FFT convolutions.
+        lo, hi = x.min() - 4 * hs.max(), x.max() + 4 * hs.max()
+        m = 2 ** 14
+        step = (hi - lo) / (m - 1)
+        pos = (x - lo) / step
+        i0 = np.floor(pos).astype(int)
+        f = pos - i0
+        c = np.zeros(m)
+        np.add.at(c, i0, w * (1 - f))
+        np.add.at(c, np.minimum(i0 + 1, m - 1), w * f)
+        lags = np.arange(-m + 1, m) * step
+
+        def kernel_sums(scale):
+            return fftconvolve(c, norm.pdf(lags, scale=scale), mode="full")[m - 1:2 * m - 1]
+
+        scores = []
+        for h in hs:
+            int_f2 = c @ kernel_sums(np.sqrt(2) * h)
+            loo = c @ kernel_sums(h) - np.sum(w ** 2) * norm.pdf(0, scale=h)
+            scores.append(int_f2 - 2 * loo)
+    k = int(np.argmin(scores))
+    return float(hs[k]), k in (0, len(hs) - 1)
+
+
 def build_prosco_cell(values: np.ndarray, weights: np.ndarray,
-                      pdb_ids: pd.Series) -> dict:
+                      pdb_ids: pd.Series, bandwidth: str = "ucv") -> dict:
     mask = ~np.isnan(values)
     values = values[mask]
     weights = weights[mask]
@@ -93,7 +133,15 @@ def build_prosco_cell(values: np.ndarray, weights: np.ndarray,
 
     try:
         kde = gaussian_kde(values, weights=weights)
-        kde.set_bandwidth(kde.factor * BANDWIDTH_FACTOR)
+        if bandwidth == "scott":
+            kde.set_bandwidth(kde.factor * BANDWIDTH_FACTOR)
+        else:
+            sd = float(np.sqrt(kde._data_covariance.item()))
+            h_scott = sd * kde.factor
+            h, at_edge = ucv_bandwidth(values, weights, h_scott)
+            if at_edge:
+                h = h_scott
+            kde.set_bandwidth(BANDWIDTH_FACTOR * h / sd)
     except Exception as e:
         print(f"    KDE failed ({type(e).__name__}: {e}); leaving cell empty")
         return base
@@ -200,11 +248,12 @@ def main() -> None:
     hbonds_prosco.update(build_for_dataframe(angle_df, ["donor_angle", "acceptor_angle"]))
 
     output = {
-        "schema_version": "1.0",
         "method": {
             "prosco": (
                 "ProSco(x) = 100 × (1 − cum_mass_in_higher_density_bins(x)). "
-                "Per cell: weighted KDE (Gaussian, bandwidth × 1.5), "
+                "Per cell: weighted KDE (Gaussian, bandwidth = 1.5 × the unbiased "
+                "cross-validation bandwidth, or 1.5 × Scott's rule when the "
+                "cross-validation minimum lies at the edge of its search range), "
                 "equal-width bins over [data_min − 1×range, data_max + 1×range]. "
                 f"n_bins per cell = ⌈2 × support_range / bandwidth⌉ "
                 f"clamped to [{BIN_MIN}, {BIN_MAX}] (Nyquist sampling rate; "

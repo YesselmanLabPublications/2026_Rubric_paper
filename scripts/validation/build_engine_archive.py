@@ -1,4 +1,4 @@
-"""Engine output behind the better-resolution cohort and Fig. S2B/C (data/reference/engine_archive/).
+"""Engine output behind the higher-resolution cohort and Fig. S2B/C (data/reference/engine_archive/).
 
 Runs `rubric --details` once per structure and writes, for two sets of entries,
 

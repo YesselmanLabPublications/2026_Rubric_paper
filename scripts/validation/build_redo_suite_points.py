@@ -10,7 +10,7 @@ for the matched suites the script records
     bang_o, bang_r     unassigned suites (%), original and PDB-REDO
     puck_n_o, puck_n_r pucker outliers among the matched residues
 
-the same per-molecule measures as the better-resolution cohort (build_resolved_cohort.py).
+the same per-molecule measures as the higher-resolution cohort (build_resolved_cohort.py).
 The pair-score columns are left as they are; build_review_points.py fills them.
 
 Reads   data/reference/resolved_again/redo_per_structure_points.csv (structure list, clusters)

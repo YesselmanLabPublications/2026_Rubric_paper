@@ -145,7 +145,8 @@ def main() -> None:
     tmp = args.out.with_suffix(".json.part")
     tmp.write_text(json.dumps(doc, indent=1))
     tmp.replace(args.out)
-    print(f"{len(ids):,} entries {status} -> {args.out.relative_to(REPO)}")
+    out = args.out.resolve()
+    print(f"{len(ids):,} entries {status} -> {out.relative_to(REPO) if out.is_relative_to(REPO) else out}")
 
 
 if __name__ == "__main__":

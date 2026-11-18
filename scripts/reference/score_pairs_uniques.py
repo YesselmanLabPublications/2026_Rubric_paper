@@ -86,7 +86,9 @@ def main() -> None:
                 out.write(json.dumps(row) + "\n")
             n_rows += len(rows)
     tmp.replace(args.out)
-    print(f"{len(ids):,} entries {status}; {n_rows:,} pair rows -> {args.out.relative_to(REPO)}")
+    out = args.out.resolve()
+    print(f"{len(ids):,} entries {status}; {n_rows:,} pair rows -> "
+          f"{out.relative_to(REPO) if out.is_relative_to(REPO) else out}")
 
 
 if __name__ == "__main__":

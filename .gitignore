@@ -3,16 +3,15 @@ __pycache__/
 *.pyc
 .ipynb_checkpoints/
 .DS_Store
+backup/
 
-# All data is fetched from the archive (see README) - not tracked in git.
-# Note this ignores the CONTENTS of data/ rather than data/ itself: git will
-# not descend into an excluded directory, so `data/` plus a negation cannot
-# re-include anything. Excluding `data/*` leaves the negations below workable.
+# Data come from the Zenodo archives (see README) and are not tracked in git.
 data/*
 
 # PyMOL writes fetched structures into the working directory.
 *.cif
 *.zip
+*.tar.gz
 
 # Local PyMOL helpers; render_pair_examples.py is the one that belongs to the repository.
 scripts/pymol_figures/*
@@ -20,3 +19,6 @@ scripts/pymol_figures/*
 
 # Notebook result caches (rebuilt automatically when data/ changes).
 .cache/
+
+# Local drawing files, not read by the notebooks.
+figures/schematics/

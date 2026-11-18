@@ -123,7 +123,7 @@ def main() -> None:
         for k, angle in enumerate(SUITE_ANGLE_NAMES):
             c = float(center[k])
             unwrapped = np.array([c + signed_angle_gap(v, c) for v in g[angle].to_numpy(float)])
-            pcell = build_prosco_cell(unwrapped, w, pdb_series)
+            pcell = build_prosco_cell(unwrapped, w, pdb_series, bandwidth="scott")
             if pcell["prosco_per_bin"] is not None:
                 pcell["unwrap_center"] = round(c, 4)
                 prosco[angle][conformer] = pcell
@@ -133,7 +133,6 @@ def main() -> None:
         n_cells += 1
 
     prosco_out = {
-        "schema_version": "1.0",
         "method": {
             "cell": "Richardson conformer (no _ANY fallback: pooling conformers is multimodal)",
             "circular": "values unwrapped as center + signed_gap(value, center) before KDE; "
@@ -143,7 +142,6 @@ def main() -> None:
         "prosco_distributions": {"backbone": prosco},
     }
     z_out = {
-        "schema_version": "1.0",
         "method": {"M": "weighted median (unwrapped)", "sl": "(M-D1)/1.2816",
                    "su": "(D9-M)/1.2816", "circular": "unwrap via unwrap_center"},
         "z_tables": {"backbone": ztab},

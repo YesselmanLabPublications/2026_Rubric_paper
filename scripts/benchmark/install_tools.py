@@ -68,7 +68,7 @@ def main():
     ap.add_argument("--dssr", help="Path to your existing licensed x3dna-dssr executable")
     ap.add_argument("--tools-dir", type=Path, default=ROOT / ".runtime-tools")
     ap.add_argument("--rubric-source", type=Path, default=ROOT / "RUBRIC",
-                    help="RUBRIC engine source checkout (default: RUBRIC/, a clone of tag v0.1.0)")
+                    help="RUBRIC engine source checkout (default: RUBRIC/, a clone of tag v1.0)")
     ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--check", action="store_true", help="Verify the existing installation without rebuilding")
     args = ap.parse_args()
