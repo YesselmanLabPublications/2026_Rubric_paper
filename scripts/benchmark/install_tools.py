@@ -12,7 +12,7 @@ ROOT = HERE.parents[1]
 REPOS = {
     "RNAView": ("https://github.com/rcsb/RNAView.git", "master", "6349bbd94584baecf54161f40206308471be665c"),
     "bpnet": ("https://github.com/computational-biology/bpnet.git", "master", "6fd9ebcf8765b004913629ff27aa90143affc428"),
-    "fr3d-python": ("https://github.com/BGSU-RNA/fr3d-python.git", "latest", "3e6f92a739ccda126a44969f082dbf6c0eb3ad9f"),
+    "fr3d-python": ("https://github.com/BGSU-RNA/fr3d-python.git", "main", "3e6f92a739ccda126a44969f082dbf6c0eb3ad9f"),
 }
 
 
@@ -95,7 +95,7 @@ def main():
         checkout = dest / "src" / name
         if not checkout.exists():
             run(["git", "clone", "--branch", branch, url, checkout])
-        head = subprocess.check_output(["git", "rev-rubric", "HEAD"], cwd=checkout, text=True).strip()
+        head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=checkout, text=True).strip()
         dirty = subprocess.check_output(["git", "diff", "HEAD", "--name-only"], cwd=checkout, text=True).strip()
         if dirty:
             raise RuntimeError(f"Tracked source changes in {checkout}; preserve them and use a fresh --tools-dir")
