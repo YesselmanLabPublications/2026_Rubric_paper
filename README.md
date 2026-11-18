@@ -1,4 +1,4 @@
-# Code for paper: "RUBRIC: rapid quality assessment tool of RNA 3D structures"
+# Analysis code for: "RUBRIC: rapid quality assessment tool of RNA 3D structures"
 
 [![Code DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24324880.svg)](https://doi.org/10.5281/zenodo.24324880)
 [![Data DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24214090.svg)](https://doi.org/10.5281/zenodo.24214090)
